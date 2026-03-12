@@ -2157,9 +2157,6 @@ task.spawn(function()
     end
 end)
 
--- ==========================================
--- ✅ FIX: ประกาศ ClearFishingCache ก่อน walking task ทั้งหมด
--- ==========================================
 local function ClearFishingCache()
     cachedSafeZone = nil
     cachedDiamond = nil
@@ -2511,7 +2508,6 @@ task.spawn(function()
                     end
                 end
 
-                -- ✅ FIX: reset ทุกตัวแปรให้ครบ แล้ว loop กลับไปตกปลา
                 isSellingProcess = false
                 hasArrivedAtSell = false
                 isResettingUI = false
@@ -2623,7 +2619,6 @@ end)
 
 local fishingRoundCount = 0
 local lastFishingStepTime = tick()
-local isRecoveryMode = false
 local actionFirstDetected = 0 
 
 task.spawn(function()
@@ -2632,7 +2627,6 @@ task.spawn(function()
             fishingStep = 0
             hasMinigameMoved = false
             lastFishingStepTime = tick()
-            isRecoveryMode = false
             actionFirstDetected = 0
             
             UpdateBox(Box_FishBtn, nil)
@@ -2645,35 +2639,6 @@ task.spawn(function()
             lastFishingStepTime = tick()
             continue 
         end
-
-        if tick() - lastFishingStepTime > 38 and not isRecoveryMode then
-            isRecoveryMode = true
-            if FishStatusLabel then FishStatusLabel:SetDesc("⚠️ UI Stuck! Recovering...") end
-            
-            local mainUI = playerGui:FindFirstChild("MainInterface")
-            if mainUI then
-                local fBtn = getFishButton(mainUI)
-                if fBtn then forceFishClick(fBtn) end
-                task.wait(3)
-
-                clickOnce()
-                task.wait(3)
-
-                local eBtn = getExtraButton(mainUI)
-                if eBtn then forceFishClick(eBtn) end
-                task.wait(3)
-            end
-
-            ClearFishingCache()
-            fishingStep = 0
-            hasMinigameMoved = false
-            lastFishingStepTime = tick()
-            isRecoveryMode = false
-            actionFirstDetected = 0
-            continue
-        end
-
-        if isRecoveryMode then continue end 
 
         pcall(function()
             local mainUI = playerGui:FindFirstChild("MainInterface")
@@ -2691,31 +2656,52 @@ task.spawn(function()
                 if textLbl and textLbl.Visible then isFishVisible = true end
             end
 
+            local timeInStep = tick() - lastFishingStepTime
+
             if fishingStep == 0 then
                 if FishStatusLabel then FishStatusLabel:SetDesc("🎣 Waiting for Fish Button...") end
+                
                 if DetectFish_ON and isFishVisible then
                     hasMinigameMoved = false 
                     forceFishClick(fishBtn)
                     fishingStep = 1 
                     lastFishingStepTime = tick()
+                elseif timeInStep > 5.0 and DetectFish_ON then
+                    -- RECOVERY STEP 0
+                    if FishStatusLabel then FishStatusLabel:SetDesc("⚠️ Fish UI Stuck! Recovery forcing click...") end
+                    if fishBtn then forceFishClick(fishBtn) else clickOnce() end
+                    fishingStep = 1
+                    lastFishingStepTime = tick()
                 end
 
             elseif fishingStep == 1 then
                 if FishStatusLabel then FishStatusLabel:SetDesc("⏳ Waiting for Minigame...") end
+                
                 if DetectMinigame_ON and isMinigameActive and hasMinigameMoved then
                     fishingStep = 2 
                     lastFishingStepTime = tick()
                 elseif DetectFish_ON and isFishVisible then
                     fishingStep = 0
                     lastFishingStepTime = tick()
+                elseif timeInStep > 5.0 and DetectMinigame_ON then
+                    -- RECOVERY STEP 1
+                    if FishStatusLabel then FishStatusLabel:SetDesc("⚠️ Minigame Stuck! Recovery skipping to Action...") end
+                    fishingStep = 2
+                    lastFishingStepTime = tick()
                 end
 
             elseif fishingStep == 2 then
-                -- จบมินิเกม รีเซ็ตเวลารอเอาไว้ก่อน
                 if not DetectMinigame_ON or not isMinigameActive then
                     fishingStep = 3 
                     lastFishingStepTime = tick()
                     actionFirstDetected = 0 
+                elseif timeInStep > 5.0 then
+                    -- RECOVERY STEP 2
+                    if FishStatusLabel then FishStatusLabel:SetDesc("⚠️ Minigame timeout! Recovery skipping to Action...") end
+                    clickOnce()
+                    fishingStep = 3
+                    lastFishingStepTime = tick()
+                    actionFirstDetected = 0
                 end
 
             elseif fishingStep == 3 then
@@ -2728,7 +2714,6 @@ task.spawn(function()
                 local isActionVisible = (extraBtn and extraBtn.Visible)
                 
                 if isActionVisible then
-                    -- ถ่าปุ่มขึ้นมาแล้วจริงๆ ค่อยเริ่มจับเวลา 2 วินาที
                     if actionFirstDetected == 0 then
                         actionFirstDetected = tick()
                     end
@@ -2749,7 +2734,7 @@ task.spawn(function()
                         
                         if FishStatusLabel then FishStatusLabel:SetDesc("⏳ Delay 2s (Action -> Fish)...") end
                         lastFishingStepTime = tick() 
-                        task.wait(2.0) -- Delay 2 วิ ก่อนกลับไป Fish
+                        task.wait(2.0)
                         
                         fishingStep = 0
                         hasMinigameMoved = false
@@ -2759,17 +2744,37 @@ task.spawn(function()
                         if FishStatusLabel then FishStatusLabel:SetDesc("🚶 Resetting Position to fix UI bug...") end
                         isResettingUI = true 
                     else
-                        -- นับถอยหลังให้เห็นใน UI
                         if FishStatusLabel then FishStatusLabel:SetDesc(string.format("⏳ Action found! Wait %.1fs...", 2.0 - (tick() - actionFirstDetected))) end
                     end
                 else
-                    -- ถ้าปุ่มหายไปกระทันหัน ให้ยกเลิกการนับเวลาไปก่อน
                     actionFirstDetected = 0
                     
                     if DetectFish_ON and isFishVisible then
                         fishingStep = 0
                         hasMinigameMoved = false
                         lastFishingStepTime = tick()
+                    elseif timeInStep > 5.0 and DetectAction_ON then
+                        -- RECOVERY STEP 3
+                        if FishStatusLabel then FishStatusLabel:SetDesc("⚠️ Action Stuck! Recovery forcing click & counting...") end
+                        
+                        if extraBtn then forceFishClick(extraBtn) else clickOnce() end
+                        
+                        currentFishCount = currentFishCount + 1
+                        fishingRoundCount = fishingRoundCount + 1 
+                        
+                        if FishBagLabel then FishBagLabel:SetDesc(currentFishCount .. " / " .. targetFishCount) end
+                        
+                        if currentFishCount >= targetFishCount then
+                            ClearFishingCache()
+                            fishingRoundCount = 0
+                        end
+
+                        task.wait(1.0)
+                        fishingStep = 0
+                        hasMinigameMoved = false
+                        lastFishingStepTime = tick()
+                        actionFirstDetected = 0
+                        isResettingUI = true 
                     else
                         if FishStatusLabel then FishStatusLabel:SetDesc("🔍 Waiting for Action Button...") end
                     end
