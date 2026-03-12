@@ -2667,9 +2667,15 @@ task.spawn(function()
                     fishingStep = 1 
                     lastFishingStepTime = tick()
                 elseif timeInStep > 5.0 and DetectFish_ON then
-                    -- RECOVERY STEP 0
+                    -- RECOVERY STEP 0: มี UI แต่ปุ่มค้าง
                     if FishStatusLabel then FishStatusLabel:SetDesc("⚠️ Fish UI Stuck! Recovery forcing click...") end
                     if fishBtn then forceFishClick(fishBtn) else clickOnce() end
+                    fishingStep = 1
+                    lastFishingStepTime = tick()
+                elseif timeInStep > 15.0 then
+                    -- ✅ NEW RECOVERY: ไม่มี UI โผล่มาเลย รอนานเกิน 15 วิ
+                    if FishStatusLabel then FishStatusLabel:SetDesc("⚠️ No Fish UI! Recovery skipping to next step...") end
+                    clickOnce()
                     fishingStep = 1
                     lastFishingStepTime = tick()
                 end
