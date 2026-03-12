@@ -936,7 +936,6 @@ local Tabs = {
     Fishing = Window:AddTab({ Title = "Auto Fish", Icon = "anchor" }),
     Hop = Window:AddTab({ Title = "Auto Hop", Icon = "globe" }),
     Merchant = Window:AddTab({ Title = "NPC Alerts", Icon = "bell" }),
-    Monitor = Window:AddTab({ Title = "System Cache", Icon = "server" }),
     Webhook = Window:AddTab({ Title = "Settings", Icon = "settings" })
 }
 
@@ -1070,6 +1069,7 @@ AutoCraftToggle:OnChanged(function(Value)
     SaveConfig()
 end)
 
+Tabs.Fishing:AddParagraph({ Title = "⚠️ Important", Content = "Please close the Chat Box before enabling Auto Fish to prevent accidental clicks." })
 local FishStatusLabel = Tabs.Fishing:AddParagraph({ Title = "Status", Content = "Idle" })
 local FishBagLabel = Tabs.Fishing:AddParagraph({ Title = "Fish in Bag", Content = currentFishCount .. " / " .. targetFishCount })
 
@@ -1185,40 +1185,6 @@ Tabs.Merchant:AddButton({
         Fluent:Notify({ Title = "Webhook Test", Content = "Test payload sent for Jester.", Duration = 3 })
     end
 })
-
-local SysMemLabel = Tabs.Monitor:AddParagraph({ Title = "Memory (RAM) Usage", Content = "-- MB" })
-local SysCacheLabel = Tabs.Monitor:AddParagraph({ Title = "Cache Status", Content = "Waiting..." })
-local SysLoopLabel = Tabs.Monitor:AddParagraph({ Title = "Background Tasks", Content = "Waiting..." })
-
-local function CountDictionary(dict)
-    local count = 0
-    if type(dict) == "table" then
-        for _ in pairs(dict) do count = count + 1 end
-    end
-    return count
-end
-
-task.spawn(function()
-    while task.wait(1) do
-        pcall(function()
-            local mem = math.floor(collectgarbage("count") / 1024)
-            SysMemLabel:SetDesc(mem .. " MB (If > 1000MB, game might lag)")
-            
-            local cacheStr = string.format("Scanned Items: %d\nCached Target Buttons: %d\nFish Button Found: %s\nAction Button Found: %s\nAura Queue: %d", 
-                #ScannedItemsList, 
-                CountDictionary(CachedTargetButtons), 
-                (cachedFishBtn and "Yes" or "No"),
-                (cachedExtraBtn and "Yes" or "No"),
-                #AuraQueue)
-            SysCacheLabel:SetDesc(cacheStr)
-            
-            local loopStr = string.format("Auto Fish Active: %s\nSelling Process: %s", 
-                tostring(autoFarmEnabled), 
-                tostring(isSellingProcess))
-            SysLoopLabel:SetDesc(loopStr)
-        end)
-    end
-end)
 
 local WhIntervalSlider = Tabs.Webhook:AddSlider("WhInterval", { Title = "Send Interval (Seconds)", Description = "Time between saves", Default = HubConfig.WhInterval, Min = 10, Max = 60, Rounding = 1 })
 WhIntervalSlider:OnChanged(function(Value) 
@@ -2068,59 +2034,9 @@ task.spawn(function()
     end
 end)
 
-local DebugGui = Instance.new("ScreenGui")
-DebugGui.Name = "XT_FishingDebug"
-DebugGui.IgnoreGuiInset = false
-pcall(function() DebugGui.Parent = game:GetService("CoreGui") end)
-if not DebugGui.Parent then DebugGui.Parent = player:WaitForChild("PlayerGui") end
-
-local function CreateDebugBox(name, color)
-    local frame = Instance.new("Frame")
-    frame.Name = name
-    frame.BackgroundColor3 = color
-    frame.BackgroundTransparency = 0.7
-    frame.BorderSizePixel = 2
-    frame.BorderColor3 = color
-    frame.Visible = false
-    frame.Parent = DebugGui
-    
-    local label = Instance.new("TextLabel")
-    label.Text = name
-    label.Size = UDim2.new(1, 0, 0, 20)
-    label.Position = UDim2.new(0, 0, 0, -20)
-    label.BackgroundTransparency = 1
-    label.TextColor3 = color
-    label.TextStrokeTransparency = 0
-    label.Font = Enum.Font.GothamBold
-    label.TextSize = 12
-    label.Parent = frame
-    
-    return frame
-end
-
-local Box_FishUI = CreateDebugBox("Fish UI (Size)", Color3.fromRGB(0, 255, 0))
-local Box_MiniUI = CreateDebugBox("Minigame UI (Size)", Color3.fromRGB(255, 255, 0))
-local Box_ActionUI = CreateDebugBox("Action UI (Size)", Color3.fromRGB(255, 0, 0))
-local Box_FishBtn = CreateDebugBox("Fish Button", Color3.fromRGB(0, 255, 100))
-local Box_ExtraBtn = CreateDebugBox("Action Button", Color3.fromRGB(0, 100, 255))
-
-local function UpdateBox(box, element)
-    if not autoFarmEnabled then box.Visible = false return end
-    if element and element.Parent and element.Visible and element.AbsoluteSize.X > 0 then
-        box.Size = UDim2.new(0, element.AbsoluteSize.X, 0, element.AbsoluteSize.Y)
-        box.Position = UDim2.new(0, element.AbsolutePosition.X, 0, element.AbsolutePosition.Y)
-        box.Visible = true
-    else
-        box.Visible = false
-    end
-end
-
 task.spawn(function()
     while task.wait(0.2) do
-        if not autoFarmEnabled then 
-            UpdateBox(Box_FishUI, nil)
-            UpdateBox(Box_MiniUI, nil)
-            UpdateBox(Box_ActionUI, nil)
+        if not autoFarmEnabled then
             continue 
         end
         local mainUI = playerGui:FindFirstChild("MainInterface")
@@ -2150,10 +2066,6 @@ task.spawn(function()
         DetectFish_ON = fishOn
         DetectMinigame_ON = miniOn
         DetectAction_ON = actOn
-
-        UpdateBox(Box_FishUI, fUI)
-        UpdateBox(Box_MiniUI, mUI)
-        UpdateBox(Box_ActionUI, aUI)
     end
 end)
 
@@ -2628,9 +2540,6 @@ task.spawn(function()
             hasMinigameMoved = false
             lastFishingStepTime = tick()
             actionFirstDetected = 0
-            
-            UpdateBox(Box_FishBtn, nil)
-            UpdateBox(Box_ExtraBtn, nil)
             continue 
         end
         
@@ -2648,7 +2557,6 @@ task.spawn(function()
             if DetectFish_ON then
                 fishBtn = getFishButton(mainUI)
             end
-            UpdateBox(Box_FishBtn, fishBtn) 
 
             local isFishVisible = false
             if fishBtn and fishBtn.Visible then
@@ -2715,7 +2623,6 @@ task.spawn(function()
                 if DetectAction_ON then
                     extraBtn = getExtraButton(mainUI)
                 end
-                UpdateBox(Box_ExtraBtn, extraBtn) 
 
                 local isActionVisible = (extraBtn and extraBtn.Visible)
                 
