@@ -793,7 +793,7 @@ local function isCacheValid(element)
 end
 
 local function getExtraButton(mainUI)
-    -- ตรวจ cache: ต้องยังอยู่ใน DOM, visible, และขนาดไม่เป็น 0
+    -- ตรวจ cache ก่อน
     if cachedExtraBtn and cachedExtraBtn.Parent and cachedExtraBtn:IsDescendantOf(playerGui) then
         local ok, vis = pcall(function() return cachedExtraBtn.Visible end)
         if ok and vis and cachedExtraBtn.AbsoluteSize.X > 0 then
@@ -802,53 +802,41 @@ local function getExtraButton(mainUI)
     end
     cachedExtraBtn = nil
 
-    -- วิธีที่ 1: ใช้ Action UI container (size xOff~250 / xScl~0.185) เป็นตัวค้นหา
-    -- แล้วหา ImageButton / TextButton ลูกที่ visible ข้างใน
-    for _, child in ipairs(mainUI:GetChildren()) do
-        if child:IsA("GuiObject") and child.Visible then
-            local xOff = child.Size.X.Offset
-            local xScl = child.Size.X.Scale
-            if math.abs(xOff - 250) <= 2 or math.abs(xScl - 0.185) <= 0.005 then
-                -- นี่คือ Action UI container — หา button ข้างใน
-                for _, desc in ipairs(child:GetDescendants()) do
-                    if (desc:IsA("ImageButton") or desc:IsA("TextButton")) and desc.Visible then
-                        local sz = desc.AbsoluteSize
-                        if sz.X > 20 and sz.Y > 20 then
-                            cachedExtraBtn = desc
-                            return cachedExtraBtn
-                        end
-                    end
-                end
-                -- ถ้า container เองเป็น GuiButton ก็ใช้เลย
-                if child:IsA("GuiButton") then
-                    cachedExtraBtn = child
-                    return cachedExtraBtn
-                end
-            end
-        end
-    end
-
-    -- วิธีที่ 2: ค้นหาแบบ structure เดิม (ลึก 4 ชั้น ImageLabel)
-    for _, child1 in ipairs(mainUI:GetChildren()) do
-        if child1:IsA("ImageLabel") then
-            for _, child2 in ipairs(child1:GetChildren()) do
-                if child2:IsA("ImageLabel") then
-                    for _, child3 in ipairs(child2:GetChildren()) do
-                        if child3:IsA("ImageButton") and child3.Visible then
-                            for _, child4 in ipairs(child3:GetChildren()) do
-                                if child4:IsA("ImageLabel") then
-                                    cachedExtraBtn = child3
-                                    return cachedExtraBtn
-                                end
+    -- Primary: exact path ที่รู้แน่นอน
+    -- MainInterface > ImageLabel > ImageLabel > ImageButton
+    pcall(function()
+        for _, lv1 in ipairs(mainUI:GetChildren()) do
+            if lv1:IsA("ImageLabel") then
+                for _, lv2 in ipairs(lv1:GetChildren()) do
+                    if lv2:IsA("ImageLabel") then
+                        for _, lv3 in ipairs(lv2:GetChildren()) do
+                            if lv3:IsA("ImageButton") and lv3.Visible and lv3.AbsoluteSize.X > 0 then
+                                cachedExtraBtn = lv3
+                                return
                             end
                         end
                     end
                 end
             end
         end
-    end
+    end)
+    if cachedExtraBtn then return cachedExtraBtn end
 
-    return nil
+    -- Fallback: หา ImageButton ที่ parent chain ตรงกับ structure
+    pcall(function()
+        for _, desc in ipairs(mainUI:GetDescendants()) do
+            if desc:IsA("ImageButton") and desc.Visible and desc.AbsoluteSize.X > 20 and desc.AbsoluteSize.Y > 20 then
+                local p1 = desc.Parent
+                local p2 = p1 and p1.Parent
+                if p1 and p1:IsA("ImageLabel") and p2 and p2:IsA("ImageLabel") then
+                    cachedExtraBtn = desc
+                    return
+                end
+            end
+        end
+    end)
+
+    return cachedExtraBtn
 end
 
 local function getFishButton(mainUI)
@@ -1219,21 +1207,27 @@ task.spawn(function()
                 "Action   : " .. actInfo .. "\n" ..
                 "(🎬 = animating, กดยังไม่ได้)\n" ..
                 "UI Children: " .. #mainUI:GetChildren() .. " | Step: " .. fishingStep .. "\n" ..
-                "Action AnchorPoint: " .. (function()
+                "Action Position: " .. (function()
                     local txt = "N/A"
                     pcall(function()
-                        for _, child in ipairs(mainUI:GetChildren()) do
-                            if child:IsA("GuiObject") and child.Visible then
-                                local xOff, xScl = child.Size.X.Offset, child.Size.X.Scale
-                                if math.abs(xOff - 250) <= 2 or math.abs(xScl - 0.185) <= 0.005 then
-                                    local btn = child:FindFirstChildWhichIsA("ImageButton", true)
-                                            or child:FindFirstChildWhichIsA("TextButton", true)
-                                    if btn then
-                                        local ap = btn.AnchorPoint
-                                        local ready = math.abs(ap.X - 1) < 0.05 and math.abs(ap.Y) < 0.05
-                                        txt = string.format("{%.0f, %.0f} %s", ap.X, ap.Y, ready and "✅ Ready" or "⏳ Wait")
+                        for _, lv1 in ipairs(mainUI:GetChildren()) do
+                            if lv1:IsA("ImageLabel") then
+                                for _, lv2 in ipairs(lv1:GetChildren()) do
+                                    if lv2:IsA("ImageLabel") then
+                                        for _, lv3 in ipairs(lv2:GetChildren()) do
+                                            if lv3:IsA("ImageButton") and lv3.Visible then
+                                                local pos = lv3.Position
+                                                local xScaleOK = math.abs(pos.X.Scale - 1) < 0.05
+                                                local xOffOK   = math.abs(pos.X.Offset)    < 5
+                                                local yOK      = math.abs(pos.Y.Scale)      < 0.05 and math.abs(pos.Y.Offset) < 5
+                                                local ready = xScaleOK and xOffOK and yOK
+                                                txt = string.format("{1,0},{%.2f,0} %s",
+                                                    pos.X.Offset,
+                                                    ready and "✅ Ready" or "⏳ Wait")
+                                                return
+                                            end
+                                        end
                                     end
-                                    break
                                 end
                             end
                         end
@@ -2798,20 +2792,32 @@ task.spawn(function()
                 end
             end
 
-            -- หา Action container + button
+            -- หา Action container + button ด้วย exact path
+            -- MainInterface > ImageLabel(lv1) > ImageLabel(lv2=container) > ImageButton(extraBtn)
             local actionContainer = nil
             local extraBtn = nil
             if DetectAction_ON then
-                for _, child in ipairs(mainUI:GetChildren()) do
-                    if child:IsA("GuiObject") and child.Visible then
-                        local xOff, xScl = child.Size.X.Offset, child.Size.X.Scale
-                        if math.abs(xOff - 250) <= 2 or math.abs(xScl - 0.185) <= 0.005 then
-                            actionContainer = child
-                            break
+                pcall(function()
+                    for _, lv1 in ipairs(mainUI:GetChildren()) do
+                        if lv1:IsA("ImageLabel") then
+                            for _, lv2 in ipairs(lv1:GetChildren()) do
+                                if lv2:IsA("ImageLabel") then
+                                    for _, lv3 in ipairs(lv2:GetChildren()) do
+                                        if lv3:IsA("ImageButton") and lv3.Visible and lv3.AbsoluteSize.X > 0 then
+                                            actionContainer = lv2  -- lv2 คือ container หลัก
+                                            extraBtn = lv3
+                                            return
+                                        end
+                                    end
+                                end
+                            end
                         end
                     end
+                end)
+                -- ถ้าหาจาก path ไม่เจอ fallback ใช้ getExtraButton
+                if not extraBtn then
+                    extraBtn = getExtraButton(mainUI)
                 end
-                extraBtn = getExtraButton(mainUI)
             end
 
             local isActionVisible = false
@@ -3002,87 +3008,98 @@ task.spawn(function()
 
                 if isActionVisible then
                     if actionFirstDetected == 0 then actionFirstDetected = tick() end
-                    local elapsed = tick() - actionFirstDetected
 
-                    -- ตรวจ AnchorPoint: {1,0} เท่านั้น = animation จบ ปุ่มหยุดเลื่อนแล้ว
+                    -- ตรวจ Position ของ ImageButton:
+                    -- {1,0},{-0.15,0} = กำลัง animate เข้ามา ยังกดไม่ได้
+                    -- {1,0},{0,0}     = พร้อมแล้ว → กดได้
                     local isPositionReady = false
                     pcall(function()
-                        local ap = extraBtn.AnchorPoint
-                        local apOK = math.abs(ap.X - 1) < 0.05 and math.abs(ap.Y) < 0.05
-                        local posOK = extraBtn.AbsolutePosition.X > 0
-                        isPositionReady = apOK and posOK
+                        local pos = extraBtn.Position
+                        local xScaleOK = math.abs(pos.X.Scale - 1) < 0.05
+                        local xOffOK   = math.abs(pos.X.Offset)    < 5
+                        local yOK      = math.abs(pos.Y.Scale)      < 0.05
+                                      and math.abs(pos.Y.Offset)    < 5
+                        isPositionReady = xScaleOK and xOffOK and yOK
                     end)
-                    -- fallback: ถ้า AnchorPoint ตรวจไม่ได้ ใช้ animation BG check แทน
-                    if not isPositionReady then
-                        isPositionReady = isActionAnimDone
-                    end
 
-                    if isPositionReady and elapsed >= 0.5 then
-                        if FishStatusLabel then FishStatusLabel:SetDesc("⚙️ Clicking Action Button...") end
+                    if isPositionReady then
+                        -- ✅ Position == {1,0},{0,0} → กดซ้ำทุก 0.5 วิ จนกว่า Position จะเปลี่ยน
+                        if FishStatusLabel then FishStatusLabel:SetDesc("⚙️ Clicking Action (spam 0.5s)...") end
 
-                        -- กดครั้งที่ 1
-                        forceFishClick(extraBtn)
-                        task.wait(0.3)
-
-                        -- ตรวจว่ากดติด: Action UI หาย (BG >= 0.9 หรือ Visible false)
-                        local actionClickedOK = false
-                        pcall(function()
-                            local vis = extraBtn.Visible
-                            local bg = actionContainer and actionContainer.BackgroundTransparency
-                                    or extraBtn.BackgroundTransparency
-                            actionClickedOK = (not vis) or (bg >= 0.9)
-                        end)
-
-                        if not actionClickedOK then
-                            -- กดไม่ติด retry ครั้งที่ 2
-                            if FishStatusLabel then FishStatusLabel:SetDesc("⚠️ Action miss! Retry...") end
-                            task.wait(0.1)
-                            forceFishClick(extraBtn)
-                            task.wait(0.3)
+                        local maxAttempts = 10
+                        for i = 1, maxAttempts do
+                            -- ตรวจก่อนกดว่า Position ยังเป็น {1,0},{0,0} อยู่ไหม
+                            local stillReady = false
                             pcall(function()
-                                local vis = extraBtn.Visible
-                                local bg = actionContainer and actionContainer.BackgroundTransparency
-                                        or extraBtn.BackgroundTransparency
-                                actionClickedOK = (not vis) or (bg >= 0.9)
+                                local pos = extraBtn.Position
+                                local xScaleOK = math.abs(pos.X.Scale - 1) < 0.05
+                                local xOffOK   = math.abs(pos.X.Offset)    < 5
+                                local yOK      = math.abs(pos.Y.Scale)      < 0.05
+                                              and math.abs(pos.Y.Offset)    < 5
+                                stillReady = xScaleOK and xOffOK and yOK and extraBtn.Visible
                             end)
-                        end
 
-                        if actionClickedOK then
-                            -- ✅ กดติดแน่นอน นับรอบ
-                            if FishStatusLabel then FishStatusLabel:SetDesc("✅ Action clicked!") end
-                            currentFishCount = currentFishCount + 1
-                            fishingRoundCount = fishingRoundCount + 1
-                            if FishBagLabel then FishBagLabel:SetDesc(currentFishCount .. " / " .. targetFishCount) end
-                            if currentFishCount >= targetFishCount then
-                                ClearFishingCache()
-                                fishingRoundCount = 0
+                            if not stillReady then
+                                -- Position เปลี่ยนแล้ว = กดสำเร็จ ออกจาก loop
+                                if FishStatusLabel then FishStatusLabel:SetDesc("✅ Action button dismissed!") end
+                                break
                             end
 
-                            if FishStatusLabel then FishStatusLabel:SetDesc("⏳ Delay 2s (Action → Fish)...") end
-                            task.wait(2.0)
-
-                            fishingStep = 0
-                            hasMinigameMoved = false
-                            lastFishingStepTime = tick()
-                            actionFirstDetected = 0
-                            resetAllRecovery()
-                            cachedExtraBtn = nil
-                            if _G._actionBGSample then _G._actionBGSample = {} end
-
-                            if FishStatusLabel then FishStatusLabel:SetDesc("🚶 Resetting Position...") end
-                            isResettingUI = true
-                        else
-                            -- กดไม่ติดทั้ง 2 ครั้ง reset detect ใหม่
-                            if FishStatusLabel then FishStatusLabel:SetDesc("⚠️ Action click failed, re-detecting...") end
-                            cachedExtraBtn = nil
-                            actionFirstDetected = 0
-                            lastFishingStepTime = tick()
+                            forceFishClick(extraBtn)
+                            if FishStatusLabel then FishStatusLabel:SetDesc(string.format("⚙️ Clicking Action... (%d/%d)", i, maxAttempts)) end
+                            task.wait(0.5)
                         end
 
-                    elseif not isPositionReady then
-                        if FishStatusLabel then FishStatusLabel:SetDesc("⏳ Waiting for Action position...") end
+                        -- รอ 0.5 วิ แล้วกด ImageLabel ลูก (confirm)
+                        task.wait(0.5)
+                        local confirmBtn = nil
+                        pcall(function()
+                            for _, child in ipairs(extraBtn:GetChildren()) do
+                                if child:IsA("ImageLabel") and child.Visible then
+                                    confirmBtn = child
+                                    break
+                                end
+                            end
+                        end)
+                        if confirmBtn then
+                            if FishStatusLabel then FishStatusLabel:SetDesc("⚙️ Clicking Confirm (ImageLabel)...") end
+                            forceFishClick(confirmBtn)
+                            task.wait(0.3)
+                            local stillHere = false
+                            pcall(function() stillHere = confirmBtn.Visible and confirmBtn.AbsoluteSize.X > 0 end)
+                            if stillHere then
+                                forceFishClick(confirmBtn)
+                                task.wait(0.2)
+                            end
+                        end
+
+                        -- ✅ นับรอบ
+                        if FishStatusLabel then FishStatusLabel:SetDesc("✅ Action done!") end
+                        currentFishCount = currentFishCount + 1
+                        fishingRoundCount = fishingRoundCount + 1
+                        if FishBagLabel then FishBagLabel:SetDesc(currentFishCount .. " / " .. targetFishCount) end
+                        if currentFishCount >= targetFishCount then
+                            ClearFishingCache()
+                            fishingRoundCount = 0
+                        end
+
+                        if FishStatusLabel then FishStatusLabel:SetDesc("⏳ Delay 2s (Action → Fish)...") end
+                        task.wait(2.0)
+
+                        fishingStep = 0
+                        hasMinigameMoved = false
+                        lastFishingStepTime = tick()
+                        actionFirstDetected = 0
+                        resetAllRecovery()
+                        cachedExtraBtn = nil
+                        if _G._actionBGSample then _G._actionBGSample = {} end
+
+                        if FishStatusLabel then FishStatusLabel:SetDesc("🚶 Resetting Position...") end
+                        isResettingUI = true
+
                     else
-                        if FishStatusLabel then FishStatusLabel:SetDesc(string.format("⏳ Action ready in %.1fs...", 0.5 - elapsed)) end
+                        -- Position ยังเป็น {1,0},{-0.15,0} = กำลัง animate เข้ามา
+                        if FishStatusLabel then FishStatusLabel:SetDesc("⏳ Waiting for {1,0},{0,0}...") end
                     end
 
                 else
