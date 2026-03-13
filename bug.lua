@@ -1230,7 +1230,8 @@ task.spawn(function()
                                             or child:FindFirstChildWhichIsA("TextButton", true)
                                     if btn then
                                         local ap = btn.AnchorPoint
-                                        txt = string.format("{%.0f, %.0f}", ap.X, ap.Y)
+                                        local ready = math.abs(ap.X - 1) < 0.05 and math.abs(ap.Y) < 0.05
+                                        txt = string.format("{%.0f, %.0f} %s", ap.X, ap.Y, ready and "✅ Ready" or "⏳ Wait")
                                     end
                                     break
                                 end
@@ -3003,12 +3004,11 @@ task.spawn(function()
                     if actionFirstDetected == 0 then actionFirstDetected = tick() end
                     local elapsed = tick() - actionFirstDetected
 
-                    -- ตรวจ AnchorPoint: {1,0} หรือ {0,0} = animation จบ ปุ่มหยุดเลื่อนแล้ว
+                    -- ตรวจ AnchorPoint: {1,0} เท่านั้น = animation จบ ปุ่มหยุดเลื่อนแล้ว
                     local isPositionReady = false
                     pcall(function()
                         local ap = extraBtn.AnchorPoint
-                        local apOK = (math.abs(ap.X - 1) < 0.05 and math.abs(ap.Y) < 0.05)
-                                  or (math.abs(ap.X)     < 0.05 and math.abs(ap.Y) < 0.05)
+                        local apOK = math.abs(ap.X - 1) < 0.05 and math.abs(ap.Y) < 0.05
                         local posOK = extraBtn.AbsolutePosition.X > 0
                         isPositionReady = apOK and posOK
                     end)
