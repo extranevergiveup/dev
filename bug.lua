@@ -1436,7 +1436,7 @@ task.spawn(function()
 end)
 -- ────────────────────────────────────────────────────────────
 
- = Tabs.Fishing:AddToggle("AutoFishToggle", { Title = "Enable Auto Fish", Default = HubConfig.AutoFish })
+local AutoFishToggle = Tabs.Fishing:AddToggle("AutoFishToggle", { Title = "Enable Auto Fish", Default = HubConfig.AutoFish })
 AutoFishToggle:OnChanged(function(Value)
     autoFarmEnabled = Value
     HubConfig.AutoFish = Value
