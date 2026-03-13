@@ -112,6 +112,7 @@ local hasMinigameMoved = false
 
 local targetFishCount = 50 
 local currentFishCount = 0
+local currentFishMax = 50   -- ค่า max จาก UI เช่น "Inventory [12 / 50]"
 local totalSellCount = 0
 local DetectFish_ON = false
 local DetectMinigame_ON = false
@@ -2473,13 +2474,68 @@ task.spawn(function()
     end
 end)
 
+-- ==========================================
+-- ระบบเช็ค Inventory Fish (แยกจาก Auto Sell)
+-- Path: MainInterface.Frame.Frame.ImageButton  (text "Inventory [x / x]")
+-- Path สำรอง: ...ImageButton.TextLabel
+-- ==========================================
+local function GetFishInventoryCount()
+    local cur, max = 0, 0
+    pcall(function()
+        local mainUI = playerGui:FindFirstChild("MainInterface")
+        if not mainUI then return end
+
+        -- วน scan Frame → Frame → ImageButton
+        for _, f1 in ipairs(mainUI:GetChildren()) do
+            if not (f1:IsA("GuiObject") and f1.Visible) then continue end
+            for _, f2 in ipairs(f1:GetChildren()) do
+                if not (f2:IsA("GuiObject") and f2.Visible) then continue end
+                for _, imgBtn in ipairs(f2:GetChildren()) do
+                    if not (imgBtn:IsA("ImageButton") and imgBtn.Visible) then continue end
+
+                    -- หา text จาก ImageButton ตัวเอง หรือ TextLabel ลูก
+                    local rawText = ""
+                    if imgBtn:IsA("TextButton") then
+                        rawText = imgBtn.Text or ""
+                    end
+                    if rawText == "" then
+                        local tl = imgBtn:FindFirstChildWhichIsA("TextLabel")
+                        if tl then rawText = tl.Text or "" end
+                    end
+
+                    -- parse "Inventory [12 / 50]"
+                    local c, m = rawText:match("[Ii]nventory%s*%[%s*(%d+)%s*/%s*(%d+)%s*%]")
+                    if c and m then
+                        cur = tonumber(c) or 0
+                        max = tonumber(m) or 0
+                        return
+                    end
+                end
+            end
+        end
+    end)
+    return cur, max
+end
+
+-- Recovery layer tracking (ต้องอยู่ก่อน ClearFishingCache เพื่อให้ Lua มองเห็น)
+local recoveryLayer = {}
+local function getRecovery(step)
+    if not recoveryLayer[step] then recoveryLayer[step] = {layer=0, time=0} end
+    return recoveryLayer[step]
+end
+local function resetRecovery(step)
+    recoveryLayer[step] = {layer=0, time=0}
+end
+local function resetAllRecovery()
+    recoveryLayer = {}
+end
+
 local function ClearFishingCache()
     cachedSafeZone = nil
     cachedDiamond = nil
     cachedExtraBtn = nil
     cachedFishBtn = nil
-    -- reset recovery layers ด้วยเมื่อเคลียร์ cache เต็มรูปแบบ
-    if resetAllRecovery then resetAllRecovery() end
+    resetAllRecovery()
 end
 
 task.spawn(function()
@@ -2495,67 +2551,75 @@ task.spawn(function()
         local root = char and char:FindFirstChild("HumanoidRootPart")
         if not root then continue end
 
-        if autoSellEnabled and currentFishCount >= targetFishCount then
-            if not isSellingProcess then
-                hasArrivedAtSell = false
-                print("Bag Full! Initiating Sell...")
-                ClearFishingCache() -- ล้าง cache ทั้งหมดก่อนเริ่ม sell
-                fishingStep = 0
-                hasMinigameMoved = false
-                
-                -- กด Extra Action ถ้ายังค้างอยู่ (ไม่ต้องรอนาน)
-                pcall(function()
-                    local mainUI = playerGui:FindFirstChild("MainInterface")
-                    if mainUI then
-                        local extraBtn = getExtraButton(mainUI)
-                        if extraBtn and extraBtn.Visible then
-                            if FishStatusLabel then FishStatusLabel:SetDesc("⚙️ Claiming Extra Action...") end
-                            forceCraftClick(extraBtn)
-                            task.wait(0.4)
-                        end
-                    end
-                end)
+        if autoSellEnabled then
+            -- อ่านค่า inventory จริงจาก UI
+            local invCur, invMax = GetFishInventoryCount()
+            if invMax > 0 then
+                currentFishCount = invCur
+                currentFishMax = invMax
+                targetFishCount = invMax -- sync max กับ UI
+                if FishBagLabel then FishBagLabel:SetDesc(invCur .. " / " .. invMax) end
+            end
 
-                -- กดปุ่ม Bag / Inventory เพื่อเปิดหน้าขาย
-                pcall(function()
-                    if FishStatusLabel then FishStatusLabel:SetDesc("⚙️ Preparing to Sell...") end
-                    local mainUI = playerGui:FindFirstChild("MainInterface")
-                    if mainUI then
-                        local sideButtons = mainUI:FindFirstChild("SideButtons")
-                        if sideButtons then
-                            -- [FIX 3a] หาปุ่ม Bag/Inventory จาก Name แทน children[8] hard-coded
-                            local bagBtn = nil
-                            for _, btn in ipairs(sideButtons:GetChildren()) do
-                                if btn:IsA("GuiButton") or btn:IsA("ImageButton") or btn:IsA("TextButton") then
-                                    local n = btn.Name:lower()
-                                    if n:find("bag") or n:find("backpack") or n:find("inventory") or n:find("fish") then
-                                        bagBtn = btn; break
+            if invMax > 0 and invCur >= invMax then
+                if not isSellingProcess then
+                    hasArrivedAtSell = false
+                    print("Bag Full! Initiating Sell...")
+                    ClearFishingCache()
+                    fishingStep = 0
+                    hasMinigameMoved = false
+                    
+                    -- กด Extra Action ถ้ายังค้างอยู่
+                    pcall(function()
+                        local mainUI = playerGui:FindFirstChild("MainInterface")
+                        if mainUI then
+                            local extraBtn = getExtraButton(mainUI)
+                            if extraBtn and extraBtn.Visible then
+                                if FishStatusLabel then FishStatusLabel:SetDesc("⚙️ Claiming Extra Action...") end
+                                forceCraftClick(extraBtn)
+                                task.wait(0.4)
+                            end
+                        end
+                    end)
+
+                    -- กดปุ่ม Bag / Inventory เพื่อเปิดหน้าขาย
+                    pcall(function()
+                        if FishStatusLabel then FishStatusLabel:SetDesc("⚙️ Preparing to Sell...") end
+                        local mainUI = playerGui:FindFirstChild("MainInterface")
+                        if mainUI then
+                            local sideButtons = mainUI:FindFirstChild("SideButtons")
+                            if sideButtons then
+                                local bagBtn = nil
+                                for _, btn in ipairs(sideButtons:GetChildren()) do
+                                    if btn:IsA("GuiButton") or btn:IsA("ImageButton") or btn:IsA("TextButton") then
+                                        local n = btn.Name:lower()
+                                        if n:find("bag") or n:find("backpack") or n:find("inventory") or n:find("fish") then
+                                            bagBtn = btn; break
+                                        end
                                     end
                                 end
+                                if not bagBtn then
+                                    local children = sideButtons:GetChildren()
+                                    if children[8] then bagBtn = children[8] end
+                                end
+                                if bagBtn then forceCraftClick(bagBtn) task.wait(0.5) end
                             end
-                            -- fallback ใช้ index เดิมถ้าหา name ไม่เจอ
-                            if not bagBtn then
-                                local children = sideButtons:GetChildren()
-                                if children[8] then bagBtn = children[8] end
-                            end
-                            if bagBtn then forceCraftClick(bagBtn) task.wait(0.5) end
                         end
-                    end
 
-                    -- [FIX 3b] ลบ guiChildren[41] hard-coded ออก — fallback loop ครอบคลุมแล้ว
-                    local btn2 = nil
-                    for _, gui in ipairs(playerGui:GetChildren()) do
-                        if gui:IsA("ScreenGui") and gui.Name ~= "AutoFishTesterUI" then
-                            local f = gui:FindFirstChild("Frame")
-                            local tl = f and f:FindFirstChild("TextLabel")
-                            local b = tl and (tl:FindFirstChild("TextButton") or tl:FindFirstChildWhichIsA("TextButton"))
-                            if b and b.Visible then btn2 = b; break end
+                        local btn2 = nil
+                        for _, gui in ipairs(playerGui:GetChildren()) do
+                            if gui:IsA("ScreenGui") and gui.Name ~= "AutoFishTesterUI" then
+                                local f = gui:FindFirstChild("Frame")
+                                local tl = f and f:FindFirstChild("TextLabel")
+                                local b = tl and (tl:FindFirstChild("TextButton") or tl:FindFirstChildWhichIsA("TextButton"))
+                                if b and b.Visible then btn2 = b; break end
+                            end
                         end
-                    end
-                    if btn2 then forceCraftClick(btn2) task.wait(0.4) end
-                end)
-                
-                isSellingProcess = true
+                        if btn2 then forceCraftClick(btn2) task.wait(0.4) end
+                    end)
+
+                    isSellingProcess = true
+                end
             end
         end
 
@@ -2655,35 +2719,152 @@ task.spawn(function()
                                 if not sellChoiceBtn then sellChoiceBtn = validChoices[2] end -- fallback
                                 forceCraftClick(sellChoiceBtn)
                                 if not mainUI then break end
-                                if FishStatusLabel then FishStatusLabel:SetDesc("⏳ Waiting for Bag...") end
-                                task.wait(0.8) -- ลดจาก 1.5
-                                
-                                local emptyBagCheck = 0
-                                while autoFarmEnabled and isSellingProcess do
-                                    -- [FIX 1] ลบ sellAttemptStart = tick() ออก
-                                    -- เดิมทำให้ outer timeout 45 วิ ไม่ทำงาน → stuck ตลอดกาล
+                                if FishStatusLabel then FishStatusLabel:SetDesc("⏳ Detecting Sell Frame...") end
 
-                                    -- หา ScrollingFrame ที่มี item
-                                    local scrollFrame = nil
+                                -- Detect กรอบ: วน scan ทุก Frame ใน MainInterface เพื่อหาอันที่มี ScrollingFrame + ปลา
+                                -- (FindFirstChild("Frame") เจอแค่ตัวแรก ไม่แน่ใจว่าถูกตัว)
+                                local frameDetected = false
+                                local frameDetectStart = tick()
+                                local sellFrame3 = nil
+                                local sellScrollFrame = nil
+
+                                while tick() - frameDetectStart < 12 do
                                     pcall(function()
-                                        -- fast path: GetDescendants ตรง
-                                        for _, desc in ipairs(mainUI:GetDescendants()) do
-                                            if desc:IsA("ScrollingFrame") and desc.Visible then
-                                                local hasBtn = false
-                                                for _, c in ipairs(desc:GetChildren()) do
-                                                    if c:IsA("GuiButton") or c:FindFirstChildWhichIsA("GuiButton") then hasBtn = true; break end
+                                        -- วน scan ทุก Frame ชั้นที่ 1
+                                        for _, f1 in ipairs(mainUI:GetChildren()) do
+                                            if not (f1:IsA("GuiObject") and f1.Visible) then continue end
+                                            -- ชั้นที่ 2
+                                            for _, f2 in ipairs(f1:GetChildren()) do
+                                                if not (f2:IsA("GuiObject") and f2.Visible) then continue end
+                                                -- ชั้นที่ 3
+                                                for _, f3 in ipairs(f2:GetChildren()) do
+                                                    if not (f3:IsA("GuiObject") and f3.Visible) then continue end
+                                                    -- หา ScrollingFrame ใน f3
+                                                    local sf = f3:FindFirstChildWhichIsA("ScrollingFrame")
+                                                    if sf and sf.Visible and #sf:GetChildren() > 0 then
+                                                        -- ตรวจว่ามี item (child ที่ไม่ใช่ layout)
+                                                        local itemCount = 0
+                                                        for _, c in ipairs(sf:GetChildren()) do
+                                                            if not c:IsA("UIListLayout") and not c:IsA("UIGridLayout") and not c:IsA("UIPadding") then
+                                                                itemCount = itemCount + 1
+                                                            end
+                                                        end
+                                                        if itemCount > 0 then
+                                                            sellFrame3 = f3
+                                                            sellScrollFrame = sf
+                                                            frameDetected = true
+                                                            return
+                                                        end
+                                                    end
                                                 end
-                                                if hasBtn then scrollFrame = desc; break end
+                                                if frameDetected then return end
                                             end
+                                            if frameDetected then return end
                                         end
                                     end)
+
+                                    if frameDetected then
+                                        if FishStatusLabel then FishStatusLabel:SetDesc("✅ Sell Frame Detected! (" .. #sellScrollFrame:GetChildren() .. " items)") end
+                                        break
+                                    end
+                                    task.wait(0.25)
+                                end
+
+                                if not frameDetected then
+                                    if FishStatusLabel then FishStatusLabel:SetDesc("⚠️ Sell Frame not found! Retrying E...") end
+                                    pcall(function()
+                                        for i = 1, 3 do
+                                            vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                                            task.wait(0.1)
+                                            vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                                            task.wait(0.15)
+                                        end
+                                    end)
+                                    task.wait(1.5)
+                                    -- ลอง scan อีกรอบ
+                                    pcall(function()
+                                        for _, f1 in ipairs(mainUI:GetChildren()) do
+                                            if not (f1:IsA("GuiObject") and f1.Visible) then continue end
+                                            for _, f2 in ipairs(f1:GetChildren()) do
+                                                if not (f2:IsA("GuiObject") and f2.Visible) then continue end
+                                                for _, f3 in ipairs(f2:GetChildren()) do
+                                                    if not (f3:IsA("GuiObject") and f3.Visible) then continue end
+                                                    local sf = f3:FindFirstChildWhichIsA("ScrollingFrame")
+                                                    if sf and sf.Visible and #sf:GetChildren() > 0 then
+                                                        local itemCount = 0
+                                                        for _, c in ipairs(sf:GetChildren()) do
+                                                            if not c:IsA("UIListLayout") and not c:IsA("UIGridLayout") and not c:IsA("UIPadding") then
+                                                                itemCount = itemCount + 1
+                                                            end
+                                                        end
+                                                        if itemCount > 0 then
+                                                            sellFrame3 = f3
+                                                            sellScrollFrame = sf
+                                                            frameDetected = true
+                                                            return
+                                                        end
+                                                    end
+                                                end
+                                                if frameDetected then return end
+                                            end
+                                            if frameDetected then return end
+                                        end
+                                    end)
+                                    if not frameDetected then
+                                        if FishStatusLabel then FishStatusLabel:SetDesc("❌ No Sell Frame after retry. Skip sell.") end
+                                        break
+                                    end
+                                end
+
+                                local emptyBagCheck = 0
+                                local innerLoopStart = tick()
+                                local sellAllMissCount = 0
+                                while autoFarmEnabled and isSellingProcess do
+                                    -- inner loop timeout 35 วิ
+                                    if tick() - innerLoopStart > 35 then
+                                        if FishStatusLabel then FishStatusLabel:SetDesc("⚠️ Inner bag timeout! Exiting...") end
+                                        break
+                                    end
+
+                                    -- ตรวจว่ากรอบยังอยู่ไหม ใช้ sellFrame3 ที่ detect ไว้แล้ว
+                                    if sellFrame3 and (not sellFrame3.Parent or not sellFrame3.Visible) then
+                                        if FishStatusLabel then FishStatusLabel:SetDesc("✅ Sell Frame closed (sell done)!") end
+                                        break
+                                    end
+
+                                    -- ใช้ sellScrollFrame ที่ detect ไว้แล้วตรงๆ (เร็วที่สุด)
+                                    local scrollFrame = (sellScrollFrame and sellScrollFrame.Parent and sellScrollFrame.Visible) and sellScrollFrame or nil
+                                    -- fallback: หาใหม่จาก sellFrame3
+                                    if not scrollFrame and sellFrame3 and sellFrame3.Visible then
+                                        pcall(function()
+                                            local sf = sellFrame3:FindFirstChildWhichIsA("ScrollingFrame")
+                                            if sf and sf.Visible then scrollFrame = sf; sellScrollFrame = sf end
+                                        end)
+                                    end
+                                    -- fallback สุดท้าย: scan descendants
+                                    if not scrollFrame then
+                                        pcall(function()
+                                            for _, desc in ipairs(mainUI:GetDescendants()) do
+                                                if desc:IsA("ScrollingFrame") and desc.Visible and #desc:GetChildren() > 0 then
+                                                    scrollFrame = desc; break
+                                                end
+                                            end
+                                        end)
+                                    end
 
                                     if scrollFrame then
                                         local items = {}
                                         for _, v in ipairs(scrollFrame:GetChildren()) do
-                                            local btn = v:IsA("GuiButton") and v or v:FindFirstChildWhichIsA("GuiButton", true)
-                                            if btn and btn.Visible and btn.AbsoluteSize.X > 30 and btn.AbsoluteSize.Y > 30 and btn.AbsoluteSize.X < 200 then
-                                                table.insert(items, btn)
+                                            -- children คือ Frame ชื่อปลา เช่น "Rosefin"
+                                            -- หา GuiButton ข้างใน หรือใช้ Frame นั้นตรงๆ ก็ได้
+                                            if v:IsA("GuiObject") and v.Visible and v.AbsoluteSize.Y > 5 then
+                                                local btn = v:IsA("GuiButton") and v or v:FindFirstChildWhichIsA("GuiButton", true)
+                                                if btn then
+                                                    table.insert(items, btn)
+                                                else
+                                                    -- Frame ไม่มี GuiButton ลูก → ใช้ Frame ตัวเองแทน
+                                                    table.insert(items, v)
+                                                end
                                             end
                                         end
                                         
@@ -2691,37 +2872,71 @@ task.spawn(function()
                                             emptyBagCheck = 0
                                             local randomItem = items[math.random(1, #items)]
                                             pcall(function() scrollFrame.CanvasPosition = Vector2.new(0, 0) end)
-                                            task.wait(0.2) -- ลดจาก 0.5
+                                            task.wait(0.2)
                                             
                                             if FishStatusLabel then FishStatusLabel:SetDesc("⏳ Selecting Item...") end
                                             forceCraftClick(randomItem)
-                                            task.wait(0.25) -- ลดจาก 0.5
+                                            task.wait(0.4) -- รอให้ item selected แสดง Sell All
 
-                                            -- หา Sell All button (fast: scan descendants ตรง)
+                                            -- หา Sell All button ด้วย path ตรง
+                                            -- Path: MainInterface.Frame.Frame.ImageButton
+                                            -- สำรอง: MainInterface.Frame.Frame.ImageButton.TextLabel
                                             if FishStatusLabel then FishStatusLabel:SetDesc("⏳ Clicking Sell All...") end
                                             local sellAllBtn = nil
                                             pcall(function()
-                                                for _, desc in ipairs(mainUI:GetDescendants()) do
-                                                    if desc.Visible then
-                                                        local txt = nil
-                                                        if desc:IsA("TextLabel") or desc:IsA("TextButton") then
-                                                            txt = desc.Text:lower()
+                                                -- path ตรง: Frame → Frame → ImageButton
+                                                for _, f1 in ipairs(mainUI:GetChildren()) do
+                                                    if not (f1:IsA("GuiObject") and f1.Visible) then continue end
+                                                    for _, f2 in ipairs(f1:GetChildren()) do
+                                                        if not (f2:IsA("GuiObject") and f2.Visible) then continue end
+                                                        for _, imgBtn in ipairs(f2:GetChildren()) do
+                                                            if imgBtn:IsA("ImageButton") and imgBtn.Visible then
+                                                                -- ตรวจว่าเป็นปุ่ม Sell All จาก TextLabel ลูก
+                                                                local tl = imgBtn:FindFirstChildWhichIsA("TextLabel")
+                                                                if tl then
+                                                                    local txt = tl.Text:lower()
+                                                                    if txt:match("sell all") or txt:match("ขายทั้งหมด") then
+                                                                        sellAllBtn = imgBtn; return
+                                                                    end
+                                                                end
+                                                                -- ถ้าไม่มี TextLabel ลูก ลองเช็ค Name
+                                                                local n = imgBtn.Name:lower()
+                                                                if n:match("sell") or n:match("sellall") then
+                                                                    sellAllBtn = imgBtn; return
+                                                                end
+                                                            end
                                                         end
-                                                        if txt and txt:match("sell all") then
-                                                            if desc:IsA("GuiButton") then
-                                                                sellAllBtn = desc; break
-                                                            elseif desc.Parent and desc.Parent:IsA("GuiButton") then
-                                                                sellAllBtn = desc.Parent; break
+                                                        if sellAllBtn then return end
+                                                    end
+                                                    if sellAllBtn then return end
+                                                end
+                                            end)
+                                            -- fallback: scan descendants ด้วย text
+                                            if not sellAllBtn then
+                                                pcall(function()
+                                                    for _, desc in ipairs(mainUI:GetDescendants()) do
+                                                        if desc.Visible then
+                                                            local txt = nil
+                                                            if desc:IsA("TextLabel") or desc:IsA("TextButton") then
+                                                                txt = desc.Text:lower()
+                                                            end
+                                                            if txt and txt:match("sell all") then
+                                                                if desc:IsA("GuiButton") or desc:IsA("ImageButton") then
+                                                                    sellAllBtn = desc; break
+                                                                elseif desc.Parent and (desc.Parent:IsA("GuiButton") or desc.Parent:IsA("ImageButton")) then
+                                                                    sellAllBtn = desc.Parent; break
+                                                                end
                                                             end
                                                         end
                                                     end
-                                                end
-                                            end)
+                                                end)
+                                            end
                                             
                                             if sellAllBtn then
-                                                task.wait(0.3) -- ลดจาก 1.0
+                                                sellAllMissCount = 0
+                                                task.wait(0.3)
                                                 forceCraftClick(sellAllBtn)
-                                                task.wait(0.6) -- ลดจาก 1.5
+                                                task.wait(0.8) -- รอ confirm popup
 
                                                 -- หา Confirm Sell button
                                                 local targetConfirmBtn = nil
@@ -2746,14 +2961,24 @@ task.spawn(function()
                                                 end)
 
                                                 if targetConfirmBtn then
-                                                    task.wait(0.3) -- ลดจาก 1.0
+                                                    task.wait(0.3)
                                                     forceCraftClick(targetConfirmBtn)
-                                                    task.wait(0.5) -- ลดจาก 2.0
+                                                    task.wait(0.8)
+                                                    -- [FIX D] break ทันทีหลัง confirm สำเร็จ ไม่ต้อง loop ต่อ
+                                                    if FishStatusLabel then FishStatusLabel:SetDesc("✅ Sold! Closing UI...") end
+                                                    break
+                                                else
+                                                    -- Confirm popup ไม่โผล่ ลองกด Sell All ใหม่
+                                                    task.wait(0.3)
                                                 end
-
-                                                task.wait(0.3) -- ลดจาก 1.0
                                             else
-                                                task.wait(0.3)
+                                                -- [FIX C] นับ Sell All ไม่เจอ ถ้าเกิน 5 ครั้ง break ออก
+                                                sellAllMissCount = sellAllMissCount + 1
+                                                if sellAllMissCount >= 5 then
+                                                    if FishStatusLabel then FishStatusLabel:SetDesc("⚠️ Sell All btn not found! Exiting...") end
+                                                    break
+                                                end
+                                                task.wait(0.4)
                                             end
                                         else
                                             emptyBagCheck = emptyBagCheck + 1
@@ -2762,7 +2987,7 @@ task.spawn(function()
                                             continue
                                         end
                                     else
-                                        task.wait(0.5) -- ลดจาก 1.0
+                                        task.wait(0.5)
                                     end
                                 end
                                 
@@ -2861,15 +3086,27 @@ task.spawn(function()
                 isResettingUI = false
                 isAtTarget = false
                 isWalking = false
-                currentFishCount = 0
                 fishingStep = 0
                 hasMinigameMoved = false
 
-                if FishBagLabel then FishBagLabel:SetDesc(currentFishCount .. " / " .. targetFishCount) end
-                if FishStatusLabel then FishStatusLabel:SetDesc("✅ Sell Done! Walking back to fish...") end
+                -- อ่าน inventory จริงหลังขายเสร็จ
+                local postCur, postMax = GetFishInventoryCount()
+                if postMax > 0 then
+                    currentFishCount = postCur
+                    currentFishMax = postMax
+                end
+
+                if FishBagLabel then FishBagLabel:SetDesc(currentFishCount .. " / " .. (currentFishMax > 0 and currentFishMax or targetFishCount)) end
+
+                if postMax > 0 and postCur > 0 then
+                    -- ยังมีปลาเหลือ → กลับไปขายต่อ
+                    if FishStatusLabel then FishStatusLabel:SetDesc("♻️ Still " .. postCur .. " fish left → Sell again!") end
+                else
+                    if FishStatusLabel then FishStatusLabel:SetDesc("✅ Sell Done! Bag empty. Walking back to fish...") end
+                end
 
                 ClearFishingCache()
-                task.wait(0.3) -- pause เล็กน้อยก่อน walk กลับ
+                task.wait(0.3)
             end
             
         else
@@ -2974,19 +3211,7 @@ local fishingRoundCount = 0
 local lastFishingStepTime = tick()
 local actionFirstDetected = 0
 local lastLoopTick = tick() -- ใช้ตรวจ lag spike
--- Recovery layer tracking: ชั้น 1 = warn+retry, ชั้น 2 = re-detect แล้วบังคับผ่าน
-local recoveryLayer = {} -- recoveryLayer[step] = { layer=0|1|2, time=tick() }
-
-local function getRecovery(step)
-    if not recoveryLayer[step] then recoveryLayer[step] = {layer=0, time=0} end
-    return recoveryLayer[step]
-end
-local function resetRecovery(step)
-    recoveryLayer[step] = {layer=0, time=0}
-end
-local function resetAllRecovery()
-    recoveryLayer = {}
-end
+-- recovery functions ถูกย้ายขึ้นไปก่อน ClearFishingCache แล้ว (ด้านบน)
 
 task.spawn(function()
     while task.wait(0.3) do
@@ -3322,29 +3547,20 @@ task.spawn(function()
                             end
                         end
 
-                        -- ✅ นับรอบ
-                        if FishStatusLabel then FishStatusLabel:SetDesc("✅ Action done!") end
-                        currentFishCount = currentFishCount + 1
+                        -- ✅ Action done → ไป Step 4 เช็ค Inventory
+                        if FishStatusLabel then FishStatusLabel:SetDesc("✅ Action done! Checking inventory...") end
                         fishingRoundCount = fishingRoundCount + 1
-                        if FishBagLabel then FishBagLabel:SetDesc(currentFishCount .. " / " .. targetFishCount) end
-                        if currentFishCount >= targetFishCount then
-                            ClearFishingCache()
-                            fishingRoundCount = 0
-                        end
 
-                        if FishStatusLabel then FishStatusLabel:SetDesc("⏳ Delay 2s (Action → Fish)...") end
-                        task.wait(2.0)
+                        if FishStatusLabel then FishStatusLabel:SetDesc("⏳ Delay 1.5s รอปลาเข้ากระเป๋า...") end
+                        task.wait(1.5)
 
-                        fishingStep = 0
-                        hasMinigameMoved = false
+                        -- ไป Step 4: เช็ค inventory
+                        fishingStep = 4
                         lastFishingStepTime = tick()
                         actionFirstDetected = 0
                         resetAllRecovery()
                         cachedExtraBtn = nil
                         if _G._actionBGSample then _G._actionBGSample = {} end
-
-                        if FishStatusLabel then FishStatusLabel:SetDesc("🚶 Resetting Position...") end
-                        isResettingUI = true
 
                     else
                         -- Position ยังเป็น {1,0},{-0.15,0} = กำลัง animate เข้ามา
@@ -3379,27 +3595,18 @@ task.spawn(function()
                             lastFishingStepTime = tick()
 
                         elseif rec.layer == 1 and tick() - rec.time > 4.0 then
-                            if FishStatusLabel then FishStatusLabel:SetDesc("🔄 [R2] Force count & reset round...") end
+                            if FishStatusLabel then FishStatusLabel:SetDesc("🔄 [R2] Force count & go step 4...") end
                             ClearFishingCache()
                             local fallbackExtra = getExtraButton(mainUI)
                             if fallbackExtra then forceFishClick(fallbackExtra)
                             else clickOnce() end
                             task.wait(0.5)
-
-                            currentFishCount = currentFishCount + 1
                             fishingRoundCount = fishingRoundCount + 1
-                            if FishBagLabel then FishBagLabel:SetDesc(currentFishCount .. " / " .. targetFishCount) end
-                            if currentFishCount >= targetFishCount then
-                                ClearFishingCache()
-                                fishingRoundCount = 0
-                            end
-
-                            fishingStep = 0
+                            fishingStep = 4
                             hasMinigameMoved = false
                             lastFishingStepTime = tick()
                             actionFirstDetected = 0
                             resetAllRecovery()
-                            isResettingUI = true
 
                         else
                             if FishStatusLabel then FishStatusLabel:SetDesc("🔍 Waiting for Action Button...") end
@@ -3414,7 +3621,41 @@ task.spawn(function()
                     else
                         if FishStatusLabel then FishStatusLabel:SetDesc("🔍 Waiting for Action Button...") end
                     end
+
+            -- ===== STEP 4: เช็ค Inventory Fish =====
+            elseif fishingStep == 4 then
+
+                local invCur, invMax = GetFishInventoryCount()
+
+                if invMax > 0 then
+                    currentFishCount = invCur
+                    currentFishMax = invMax
+                    if FishBagLabel then FishBagLabel:SetDesc(invCur .. " / " .. invMax) end
                 end
+
+                if invMax > 0 and invCur >= invMax then
+                    -- 🎒 กระเป๋าเต็ม → ออกไปขายเลย
+                    if FishStatusLabel then FishStatusLabel:SetDesc("🎒 Bag Full! (" .. invCur .. "/" .. invMax .. ") → Going to sell...") end
+                    ClearFishingCache()
+                    fishingStep = 0
+                    hasMinigameMoved = false
+                    lastFishingStepTime = tick()
+                    resetAllRecovery()
+                    -- trigger sell ทันที (walking loop จะจับค่าจาก GetFishInventoryCount)
+                else
+                    -- 🐟 ยังมีที่ว่าง → loop ตกปลาต่อ
+                    if invMax > 0 then
+                        if FishStatusLabel then FishStatusLabel:SetDesc("🐟 Bag OK (" .. invCur .. "/" .. invMax .. ") → Continue fishing") end
+                    else
+                        if FishStatusLabel then FishStatusLabel:SetDesc("🐟 Inventory not detected → Continue fishing") end
+                    end
+                    fishingStep = 0
+                    hasMinigameMoved = false
+                    lastFishingStepTime = tick()
+                    resetAllRecovery()
+                    isResettingUI = true
+                end
+
             end
         end)
     end
