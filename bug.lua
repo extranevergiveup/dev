@@ -2523,29 +2523,33 @@ task.spawn(function()
                     if mainUI then
                         local sideButtons = mainUI:FindFirstChild("SideButtons")
                         if sideButtons then
-                            local children = sideButtons:GetChildren()
-                            if children[8] then
-                                forceCraftClick(children[8])
-                                task.wait(0.5)
+                            -- [FIX 3a] หาปุ่ม Bag/Inventory จาก Name แทน children[8] hard-coded
+                            local bagBtn = nil
+                            for _, btn in ipairs(sideButtons:GetChildren()) do
+                                if btn:IsA("GuiButton") or btn:IsA("ImageButton") or btn:IsA("TextButton") then
+                                    local n = btn.Name:lower()
+                                    if n:find("bag") or n:find("backpack") or n:find("inventory") or n:find("fish") then
+                                        bagBtn = btn; break
+                                    end
+                                end
                             end
+                            -- fallback ใช้ index เดิมถ้าหา name ไม่เจอ
+                            if not bagBtn then
+                                local children = sideButtons:GetChildren()
+                                if children[8] then bagBtn = children[8] end
+                            end
+                            if bagBtn then forceCraftClick(bagBtn) task.wait(0.5) end
                         end
                     end
 
+                    -- [FIX 3b] ลบ guiChildren[41] hard-coded ออก — fallback loop ครอบคลุมแล้ว
                     local btn2 = nil
-                    local guiChildren = playerGui:GetChildren()
-                    if guiChildren[41] then
-                        local f = guiChildren[41]:FindFirstChild("Frame")
-                        local tl = f and f:FindFirstChild("TextLabel")
-                        btn2 = tl and (tl:FindFirstChild("TextButton") or tl:FindFirstChildWhichIsA("TextButton"))
-                    end
-                    if not btn2 then
-                        for _, gui in ipairs(playerGui:GetChildren()) do
-                            if gui:IsA("ScreenGui") and gui.Name ~= "AutoFishTesterUI" then
-                                local f = gui:FindFirstChild("Frame")
-                                local tl = f and f:FindFirstChild("TextLabel")
-                                local b = tl and (tl:FindFirstChild("TextButton") or tl:FindFirstChildWhichIsA("TextButton"))
-                                if b and b.Visible then btn2 = b break end
-                            end
+                    for _, gui in ipairs(playerGui:GetChildren()) do
+                        if gui:IsA("ScreenGui") and gui.Name ~= "AutoFishTesterUI" then
+                            local f = gui:FindFirstChild("Frame")
+                            local tl = f and f:FindFirstChild("TextLabel")
+                            local b = tl and (tl:FindFirstChild("TextButton") or tl:FindFirstChildWhichIsA("TextButton"))
+                            if b and b.Visible then btn2 = b; break end
                         end
                     end
                     if btn2 then forceCraftClick(btn2) task.wait(0.4) end
@@ -2633,14 +2637,31 @@ task.spawn(function()
                             end
                             
                             if #validChoices >= 2 then
-                                forceCraftClick(validChoices[2])
+                                -- [FIX 2] หาปุ่ม "Sell" จาก text แทน validChoices[2] hard-coded
+                                local sellChoiceBtn = nil
+                                for _, btn in ipairs(validChoices) do
+                                    local btnText = ""
+                                    pcall(function()
+                                        if btn:IsA("TextButton") then btnText = btn.Text:lower()
+                                        else
+                                            local lbl = btn:FindFirstChildWhichIsA("TextLabel")
+                                            if lbl then btnText = lbl.Text:lower() end
+                                        end
+                                    end)
+                                    if btnText:find("sell") or btnText:find("ขาย") then
+                                        sellChoiceBtn = btn; break
+                                    end
+                                end
+                                if not sellChoiceBtn then sellChoiceBtn = validChoices[2] end -- fallback
+                                forceCraftClick(sellChoiceBtn)
                                 if not mainUI then break end
                                 if FishStatusLabel then FishStatusLabel:SetDesc("⏳ Waiting for Bag...") end
                                 task.wait(0.8) -- ลดจาก 1.5
                                 
                                 local emptyBagCheck = 0
                                 while autoFarmEnabled and isSellingProcess do
-                                    sellAttemptStart = tick()
+                                    -- [FIX 1] ลบ sellAttemptStart = tick() ออก
+                                    -- เดิมทำให้ outer timeout 45 วิ ไม่ทำงาน → stuck ตลอดกาล
 
                                     -- หา ScrollingFrame ที่มี item
                                     local scrollFrame = nil
